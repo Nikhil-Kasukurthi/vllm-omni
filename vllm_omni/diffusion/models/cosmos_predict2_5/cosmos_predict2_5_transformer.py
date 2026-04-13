@@ -2,6 +2,7 @@
 # Adapted from diffusers:
 # https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_cosmos.py
 
+import re
 from collections.abc import Iterable
 
 import numpy as np
@@ -36,13 +37,10 @@ def apply_rotary_emb_cosmos(
 ) -> torch.Tensor:
     # hidden_states: [B, seq, num_heads, head_dim]
     # freqs_cos/sin: [seq, head_dim]
-    # Match diffusers Cosmos RoPE: split into first-half/second-half (unbind_dim=-2)
-    cos = freqs_cos
-    sin = freqs_sin
     # Unsqueeze to [1, seq, 1, head_dim] for broadcasting over B and num_heads
-    if cos.ndim == 2 and hidden_states.ndim == 4:
-        cos = cos.unsqueeze(0).unsqueeze(2)
-        sin = sin.unsqueeze(0).unsqueeze(2)
+    if freqs_cos.ndim == 2 and hidden_states.ndim == 4:
+        freqs_cos = freqs_cos.unsqueeze(0).unsqueeze(2)
+        freqs_sin = freqs_sin.unsqueeze(0).unsqueeze(2)
 
     # Split into real/imag halves (first D//2 and last D//2)
     x_real, x_imag = hidden_states.reshape(
@@ -50,7 +48,7 @@ def apply_rotary_emb_cosmos(
     ).unbind(-2)
     x_rotated = torch.cat([-x_imag, x_real], dim=-1)
 
-    out = (hidden_states.float() * cos + x_rotated.float() * sin).to(hidden_states.dtype)
+    out = (hidden_states.float() * freqs_cos + x_rotated.float() * freqs_sin).to(hidden_states.dtype)
     return out
 
 
@@ -436,14 +434,12 @@ class CosmosFeedForward(nn.Module):
     def __init__(self, dim: int, inner_dim: int):
         super().__init__()
         self.net_0 = ColumnParallelGELU(dim, inner_dim, approximate="tanh", bias=False)
-        self.net_1 = nn.Identity()
         self.net_2 = RowParallelLinear(
             inner_dim, dim, bias=False, input_is_parallel=True, return_bias=False,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.net_0(hidden_states)
-        hidden_states = self.net_1(hidden_states)
         hidden_states = self.net_2(hidden_states)
         return hidden_states
 
@@ -532,7 +528,6 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         self.out_channels = out_channels
         self.patch_size = patch_size
         self.concat_padding_mask = concat_padding_mask
-        self.extra_pos_embed_type = extra_pos_embed_type
 
         hidden_size = num_attention_heads * attention_head_dim
 
@@ -597,7 +592,7 @@ class CosmosPredict25Transformer3DModel(nn.Module):
 
         freqs_cos, freqs_sin = self.rope(hidden_states, fps=fps)
 
-        extra_pos_emb = self.learnable_pos_embed(hidden_states) if self.extra_pos_embed_type else None
+        extra_pos_emb = self.learnable_pos_embed(hidden_states) if self.learnable_pos_embed is not None else None
 
         p_t, p_h, p_w = self.patch_size
         post_patch_num_frames = num_frames // p_t
@@ -648,7 +643,6 @@ class CosmosPredict25Transformer3DModel(nn.Module):
 
         Returns the remapped name, or None if the weight should be skipped.
         """
-        import re
 
         # Skip internal state and non-parameter tensors
         if name.endswith("._extra_state"):
@@ -704,22 +698,14 @@ class CosmosPredict25Transformer3DModel(nn.Module):
             if m2:
                 return f"{prefix}.{dst}.linear_{m2.group(1)}.{m2.group(2)}"
 
-        # Self-attention
-        sa_map = {
+        # Self-attention and cross-attention
+        attn_map = {
             "self_attn.q_proj": "attn1.to_q",
             "self_attn.k_proj": "attn1.to_k",
             "self_attn.v_proj": "attn1.to_v",
             "self_attn.output_proj": "attn1.to_out",
             "self_attn.q_norm": "attn1.norm_q",
             "self_attn.k_norm": "attn1.norm_k",
-        }
-        for src, dst in sa_map.items():
-            m2 = re.match(rf"{re.escape(src)}\.(.+)", rest)
-            if m2:
-                return f"{prefix}.{dst}.{m2.group(1)}"
-
-        # Cross-attention
-        ca_map = {
             "cross_attn.q_proj": "attn2.to_q",
             "cross_attn.k_proj": "attn2.to_k",
             "cross_attn.v_proj": "attn2.to_v",
@@ -727,7 +713,7 @@ class CosmosPredict25Transformer3DModel(nn.Module):
             "cross_attn.q_norm": "attn2.norm_q",
             "cross_attn.k_norm": "attn2.norm_k",
         }
-        for src, dst in ca_map.items():
+        for src, dst in attn_map.items():
             m2 = re.match(rf"{re.escape(src)}\.(.+)", rest)
             if m2:
                 return f"{prefix}.{dst}.{m2.group(1)}"
@@ -743,39 +729,22 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         return name  # Unrecognized, pass through
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        from vllm.distributed import (
-            get_tensor_model_parallel_rank,
-            get_tensor_model_parallel_world_size,
-        )
         from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
-        tp_rank = get_tensor_model_parallel_rank()
-        tp_size = get_tensor_model_parallel_world_size()
-
-        # Self-attention QKV fusion: separate to_q/k/v → fused to_qkv
-        stacked_params_mapping = []
-        for i in range(len(self.transformer_blocks)):
-            stacked_params_mapping.extend([
-                (f"transformer_blocks.{i}.attn1.to_qkv", f"transformer_blocks.{i}.attn1.to_q", "q"),
-                (f"transformer_blocks.{i}.attn1.to_qkv", f"transformer_blocks.{i}.attn1.to_k", "k"),
-                (f"transformer_blocks.{i}.attn1.to_qkv", f"transformer_blocks.{i}.attn1.to_v", "v"),
-            ])
+        # Self-attention QKV fusion: separate to_q/k/v -> fused to_qkv
+        stacked_params_mapping = [
+            ("attn1.to_qkv", "attn1.to_q", "q"),
+            ("attn1.to_qkv", "attn1.to_k", "k"),
+            ("attn1.to_qkv", "attn1.to_v", "v"),
+        ]
 
         # Diffusers-format name remapping (kept for compatibility)
-        weight_name_remapping = {}
-        for i in range(len(self.transformer_blocks)):
-            weight_name_remapping[f"transformer_blocks.{i}.attn1.to_out.0.weight"] = (
-                f"transformer_blocks.{i}.attn1.to_out.weight"
-            )
-            weight_name_remapping[f"transformer_blocks.{i}.attn2.to_out.0.weight"] = (
-                f"transformer_blocks.{i}.attn2.to_out.weight"
-            )
-            weight_name_remapping[f"transformer_blocks.{i}.ff.net.0.proj.weight"] = (
-                f"transformer_blocks.{i}.ff.net_0.proj.weight"
-            )
-            weight_name_remapping[f"transformer_blocks.{i}.ff.net.2.weight"] = (
-                f"transformer_blocks.{i}.ff.net_2.weight"
-            )
+        _DIFFUSERS_REMAP = {
+            ".attn1.to_out.0.": ".attn1.to_out.",
+            ".attn2.to_out.0.": ".attn2.to_out.",
+            ".ff.net.0.proj.": ".ff.net_0.proj.",
+            ".ff.net.2.": ".ff.net_2.",
+        }
 
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
@@ -790,7 +759,10 @@ class CosmosPredict25Transformer3DModel(nn.Module):
             name = remapped
 
             # Then apply diffusers-format remapping
-            name = weight_name_remapping.get(name, name)
+            for old, new in _DIFFUSERS_REMAP.items():
+                if old in name:
+                    name = name.replace(old, new)
+                    break
             original_name = name
 
             # Handle x_embedder shape mismatch: checkpoint may have extra

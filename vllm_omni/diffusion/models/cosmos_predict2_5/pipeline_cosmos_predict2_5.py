@@ -201,11 +201,8 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
                 truncation=True,
                 padding="max_length",
             )
-            input_ids = (
-                input_ids["input_ids"]
-                if not isinstance(input_ids, list) and "input_ids" in input_ids
-                else input_ids
-            )
+            if isinstance(input_ids, dict):
+                input_ids = input_ids["input_ids"]
             input_ids_batch.append(torch.LongTensor(input_ids))
 
         input_ids_batch = torch.stack(input_ids_batch, dim=0)
