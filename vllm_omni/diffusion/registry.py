@@ -58,6 +58,11 @@ _DIFFUSION_MODELS = {
         "pipeline_cosmos_predict2_5",
         "CosmosPredict25Pipeline",
     ),
+    "Cosmos2_5_PredictBasePipeline": (
+        "cosmos_predict2_5",
+        "pipeline_cosmos_predict2_5",
+        "CosmosPredict25Pipeline",
+    ),
     "WanPipeline": (
         "wan2_2",
         "pipeline_wan2_2",
@@ -356,6 +361,8 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "GlmImagePipeline": "get_glm_image_post_process_func",
     "ZImagePipeline": "get_post_process_func",
     "OvisImagePipeline": "get_ovis_image_post_process_func",
+    "CosmosPredict25Pipeline": "get_cosmos_predict25_post_process_func",
+    "Cosmos2_5_PredictBasePipeline": "get_cosmos_predict25_post_process_func",
     "WanPipeline": "get_wan22_post_process_func",
     "WanVACEPipeline": "get_wan22_vace_post_process_func",
     "LTX2Pipeline": "get_ltx2_post_process_func",
