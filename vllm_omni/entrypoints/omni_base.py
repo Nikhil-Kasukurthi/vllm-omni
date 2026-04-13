@@ -33,7 +33,7 @@ def _weak_shutdown_engine(engine: AsyncOmniEngine) -> None:
         pass
 
 
-def omni_snapshot_download(model_id: str) -> str:
+def omni_snapshot_download(model_id: str, revision: str | None = None) -> str:
     if os.path.exists(model_id):
         return model_id
 
@@ -49,6 +49,7 @@ def omni_snapshot_download(model_id: str) -> str:
             model_name_or_path=model_id,
             cache_dir=None,
             allow_patterns=["*"],
+            revision=revision,
             require_all=True,
         )
     except huggingface_hub.errors.RepositoryNotFoundError:
@@ -80,10 +81,11 @@ class OmniBase:
         async_chunk = kwargs.pop("async_chunk", False)
         output_modalities = kwargs.pop("output_modalities", None)
         diffusion_batch_size: int = kwargs.pop("diffusion_batch_size", 1)
+        revision = kwargs.get("revision", None)
 
         if "log_requests" in kwargs:
             raise TypeError("`log_requests` has been removed in Omni/AsyncOmni. Use `log_stats`.")
-        model = omni_snapshot_download(model)
+        model = omni_snapshot_download(model, revision=revision)
         self.model = model
         self.log_stats = log_stats
         self.async_chunk = async_chunk
