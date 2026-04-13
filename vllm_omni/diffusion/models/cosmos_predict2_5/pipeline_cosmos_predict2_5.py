@@ -278,14 +278,16 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
         latent_height = height // self.vae_scale_factor_spatial
         latent_width = width // self.vae_scale_factor_spatial
-        num_channels_latents = self.transformer.in_channels
+        num_channels_latents = self.vae.config.z_dim
 
         latent_shape = (1, num_channels_latents, num_latent_frames, latent_height, latent_width)
         latents = randn_tensor(latent_shape, generator=generator, device=device, dtype=torch.float32)
 
         # Text2World: no conditioning frames
+        # cond_latent matches latent shape, cond_mask is single-channel binary mask
         cond_latent = torch.zeros_like(latents)
-        cond_mask = torch.zeros_like(latents)
+        cond_mask = torch.zeros(1, 1, num_latent_frames, latent_height, latent_width,
+                                device=device, dtype=latents.dtype)
         cond_indicator = torch.zeros(1, 1, num_latent_frames, 1, 1, device=device, dtype=transformer_dtype)
 
         padding_mask = latents.new_zeros(1, 1, height, width, dtype=transformer_dtype)

@@ -15,7 +15,8 @@ set -euo pipefail
 WORKDIR="${WORKDIR:-/workspace}"
 VLLM_OMNI_REPO="${VLLM_OMNI_REPO:-https://github.com/vllm-project/vllm-omni.git}"
 VLLM_OMNI_BRANCH="${VLLM_OMNI_BRANCH:-main}"
-COSMOS_MODEL="KyleShao/Cosmos-Predict2.5-2B-Diffusers"
+COSMOS_MODEL="nvidia/Cosmos-Predict2.5-2B"
+COSMOS_REVISION="diffusers/base/post-trained"
 
 echo "============================================"
 echo " vLLM-Omni GPU Benchmark Setup"
@@ -79,11 +80,11 @@ uv pip install \
     imageio[ffmpeg]
 
 # ── 7. Download Cosmos Predict 2.5 2B model ─────────────────────────────
-echo ">>> Pre-downloading model: $COSMOS_MODEL"
+echo ">>> Pre-downloading model: $COSMOS_MODEL (revision: $COSMOS_REVISION)"
 python -c "
 from huggingface_hub import snapshot_download
 print('Downloading full model (transformer + vae + text_encoder + tokenizer + scheduler)...')
-path = snapshot_download('$COSMOS_MODEL')
+path = snapshot_download('$COSMOS_MODEL', revision='$COSMOS_REVISION')
 print(f'Model cached at: {path}')
 "
 
@@ -102,7 +103,8 @@ from diffusers import CosmosPredict25Pipeline
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="KyleShao/Cosmos-Predict2.5-2B-Diffusers")
+    parser.add_argument("--model", default="nvidia/Cosmos-Predict2.5-2B")
+    parser.add_argument("--revision", default="diffusers/base/post-trained")
     parser.add_argument("--prompt", default="A serene lakeside sunrise with mist over the water.")
     parser.add_argument("--height", type=int, default=704)
     parser.add_argument("--width", type=int, default=1280)
@@ -114,8 +116,8 @@ def main():
     args = parser.parse_args()
 
     dtype = getattr(torch, args.dtype)
-    print(f"Loading diffusers pipeline: {args.model}")
-    pipe = CosmosPredict25Pipeline.from_pretrained(args.model, torch_dtype=dtype)
+    print(f"Loading diffusers pipeline: {args.model} (revision: {args.revision})")
+    pipe = CosmosPredict25Pipeline.from_pretrained(args.model, revision=args.revision, torch_dtype=dtype)
     pipe = pipe.to("cuda")
 
     gen = torch.Generator(device="cuda").manual_seed(42)
@@ -178,7 +180,8 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="KyleShao/Cosmos-Predict2.5-2B-Diffusers")
+    parser.add_argument("--model", default="nvidia/Cosmos-Predict2.5-2B")
+    parser.add_argument("--revision", default="diffusers/base/post-trained")
     parser.add_argument("--prompt", default="A serene lakeside sunrise with mist over the water.")
     parser.add_argument("--height", type=int, default=704)
     parser.add_argument("--width", type=int, default=1280)
@@ -190,9 +193,10 @@ def main():
     parser.add_argument("--cache-backend", default=None, help="e.g. cache_dit")
     args = parser.parse_args()
 
-    print(f"Loading vLLM-Omni: {args.model}")
+    print(f"Loading vLLM-Omni: {args.model} (revision: {args.revision})")
     omni_kwargs = dict(
         model=args.model,
+        revision=args.revision,
         cfg_parallel_size=args.cfg_parallel_size,
     )
     if args.cache_backend:
@@ -251,7 +255,7 @@ from torch.profiler import profile, record_function, ProfilerActivity, schedule
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-MODEL = os.environ.get("MODEL", "KyleShao/Cosmos-Predict2.5-2B-Diffusers")
+MODEL = os.environ.get("MODEL", "nvidia/Cosmos-Predict2.5-2B")
 PROFILE_DIR = os.environ.get("PROFILE_DIR", "./profile_traces")
 
 print(f"Profiling model: {MODEL}")
