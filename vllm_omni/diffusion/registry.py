@@ -53,6 +53,11 @@ _DIFFUSION_MODELS = {
         "pipeline_ovis_image",
         "OvisImagePipeline",
     ),
+    "CosmosPredict25Pipeline": (
+        "cosmos_predict2_5",
+        "pipeline_cosmos_predict2_5",
+        "CosmosPredict25Pipeline",
+    ),
     "WanPipeline": (
         "wan2_2",
         "pipeline_wan2_2",
