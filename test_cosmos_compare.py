@@ -9,12 +9,13 @@ import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 
-MODEL_ID = "KyleShao/Cosmos-Predict2.5-2B-Diffusers"
+MODEL_ID = "nvidia/Cosmos-Predict2.5-2B"
+REVISION = "diffusers/base/post-trained"
 DTYPE = torch.bfloat16
 
 # ── Download ─────────────────────────────────────────────────────────────
-print("Downloading transformer weights...")
-model_path = snapshot_download(MODEL_ID, allow_patterns=["transformer/*"])
+print(f"Downloading transformer weights from {MODEL_ID} (revision: {REVISION})...")
+model_path = snapshot_download(MODEL_ID, revision=REVISION, allow_patterns=["transformer/*"])
 transformer_dir = os.path.join(model_path, "transformer")
 
 with open(os.path.join(transformer_dir, "config.json")) as f:
@@ -27,126 +28,25 @@ print(f"Config: num_heads={config['num_attention_heads']}, "
 print("\n=== Loading diffusers baseline ===")
 from diffusers.models.transformers.transformer_cosmos import CosmosTransformer3DModel
 
-# Instantiate from config (non-standard weight filename in this repo)
+# Official NVIDIA diffusers branch has standard naming — load directly
 diffusers_init_keys = {
     "in_channels", "out_channels", "num_attention_heads", "attention_head_dim",
     "num_layers", "mlp_ratio", "text_embed_dim", "adaln_lora_dim",
     "max_size", "patch_size", "rope_scale", "concat_padding_mask",
     "extra_pos_embed_type", "use_crossattn_projection",
+    "crossattn_proj_in_channels", "encoder_hidden_states_channels",
 }
 ref_config = {k: v for k, v in config.items() if k in diffusers_init_keys}
+# Disable crossattn_proj for testing — we pass pre-projected encoder_hidden_states
+ref_config["use_crossattn_projection"] = False
 ref_model = CosmosTransformer3DModel(**ref_config).to(dtype=DTYPE)
 
-# Load weights from safetensors — remap NVIDIA-native names to diffusers names
-import re
-
-def remap_nvidia_to_diffusers(name):
-    """Remap NVIDIA checkpoint names to diffusers CosmosTransformer3DModel names."""
-    if name.endswith("._extra_state"):
-        return None
-    if name.startswith("net.pos_embedder."):
-        return None
-
-    # crossattn_proj: skip (shape mismatch between NVIDIA and diffusers)
-    if name.startswith("net.crossattn_proj."):
-        return None
-
-    # x_embedder: net.x_embedder.proj.1 -> patch_embed.proj
-    m = re.match(r"net\.x_embedder\.proj\.\d+\.(.*)", name)
-    if m:
-        return f"patch_embed.proj.{m.group(1)}"
-
-    # t_embedder: net.t_embedder.1.* -> time_embed.t_embedder.*
-    m = re.match(r"net\.t_embedder\.\d+\.(.*)", name)
-    if m:
-        return f"time_embed.t_embedder.{m.group(1)}"
-
-    # t_embedding_norm: net.t_embedding_norm.* -> time_embed.norm.*
-    m = re.match(r"net\.t_embedding_norm\.(.*)", name)
-    if m:
-        return f"time_embed.norm.{m.group(1)}"
-
-    # final_layer: net.final_layer.adaln_modulation.{1,2} -> norm_out.linear_{1,2}
-    m = re.match(r"net\.final_layer\.adaln_modulation\.(\d+)\.(.*)", name)
-    if m:
-        return f"norm_out.linear_{m.group(1)}.{m.group(2)}"
-
-    # final_layer linear: net.final_layer.linear.* -> proj_out.*
-    m = re.match(r"net\.final_layer\.linear\.(.*)", name)
-    if m:
-        return f"proj_out.{m.group(1)}"
-
-    # transformer blocks
-    m = re.match(r"net\.blocks\.(\d+)\.(.*)", name)
-    if not m:
-        return name
-    idx, rest = m.group(1), m.group(2)
-    prefix = f"transformer_blocks.{idx}"
-
-    # AdaLN modulation
-    adaln_map = {
-        "adaln_modulation_self_attn": "norm1",
-        "adaln_modulation_cross_attn": "norm2",
-        "adaln_modulation_mlp": "norm3",
-    }
-    for src, dst in adaln_map.items():
-        m2 = re.match(rf"{src}\.(\d+)\.(.*)", rest)
-        if m2:
-            return f"{prefix}.{dst}.linear_{m2.group(1)}.{m2.group(2)}"
-
-    # Self-attention (diffusers uses separate q/k/v, to_out.0)
-    sa_map = {
-        "self_attn.q_proj": "attn1.to_q",
-        "self_attn.k_proj": "attn1.to_k",
-        "self_attn.v_proj": "attn1.to_v",
-        "self_attn.output_proj": "attn1.to_out.0",
-        "self_attn.q_norm": "attn1.norm_q",
-        "self_attn.k_norm": "attn1.norm_k",
-    }
-    for src, dst in sa_map.items():
-        m2 = re.match(rf"{re.escape(src)}\.(.*)", rest)
-        if m2:
-            return f"{prefix}.{dst}.{m2.group(1)}"
-
-    # Cross-attention
-    ca_map = {
-        "cross_attn.q_proj": "attn2.to_q",
-        "cross_attn.k_proj": "attn2.to_k",
-        "cross_attn.v_proj": "attn2.to_v",
-        "cross_attn.output_proj": "attn2.to_out.0",
-        "cross_attn.q_norm": "attn2.norm_q",
-        "cross_attn.k_norm": "attn2.norm_k",
-    }
-    for src, dst in ca_map.items():
-        m2 = re.match(rf"{re.escape(src)}\.(.*)", rest)
-        if m2:
-            return f"{prefix}.{dst}.{m2.group(1)}"
-
-    # FFN
-    m2 = re.match(r"mlp\.layer1\.(.*)", rest)
-    if m2:
-        return f"{prefix}.ff.net.0.proj.{m2.group(1)}"
-    m2 = re.match(r"mlp\.layer2\.(.*)", rest)
-    if m2:
-        return f"{prefix}.ff.net.2.{m2.group(1)}"
-
-    return name
-
 weight_files = [f for f in os.listdir(transformer_dir) if f.endswith(".safetensors")]
-remapped_state_dict = {}
+state_dict = {}
 for wf in weight_files:
-    sd = load_file(os.path.join(transformer_dir, wf), device="cpu")
-    for orig_name, tensor in sd.items():
-        new_name = remap_nvidia_to_diffusers(orig_name)
-        if new_name is not None:
-            # Trim patch_embed if needed
-            if new_name == "patch_embed.proj.weight":
-                expected = ref_model.patch_embed.proj.weight.shape[1]
-                if tensor.shape[1] > expected:
-                    tensor = tensor[:, :expected]
-            remapped_state_dict[new_name] = tensor
+    state_dict.update(load_file(os.path.join(transformer_dir, wf), device="cpu"))
 
-missing, unexpected = ref_model.load_state_dict(remapped_state_dict, strict=False)
+missing, unexpected = ref_model.load_state_dict(state_dict, strict=False)
 print(f"Diffusers model loaded: {sum(p.numel() for p in ref_model.parameters()) / 1e9:.2f}B params")
 print(f"  Missing keys: {len(missing)}, Unexpected keys: {len(unexpected)}")
 if missing:
@@ -212,17 +112,19 @@ with set_current_vllm_config(VllmConfig(device_config=device_config)):
 
     # ── 3. Prepare identical inputs ──────────────────────────────────────
     print("\n=== Preparing inputs ===")
-    B, C, T, H, W = 1, 16, 2, 16, 16
+    B, C_latent, T, H, W = 1, 16, 2, 16, 16
     text_seq_len = 16
     text_dim = config["text_embed_dim"]
 
     gen = torch.manual_seed(42)
-    hidden_states = torch.randn(B, C, T, H, W, dtype=DTYPE, generator=gen)
+    hidden_states = torch.randn(B, C_latent, T, H, W, dtype=DTYPE, generator=gen)
     timestep = torch.tensor([0.5], dtype=DTYPE)
     encoder_hidden_states = torch.randn(B, text_seq_len, text_dim, dtype=DTYPE, generator=gen)
     padding_mask = torch.zeros(B, 1, H, W, dtype=DTYPE)
+    condition_mask = torch.zeros(B, 1, T, H, W, dtype=DTYPE)
 
     print(f"  hidden_states:         {list(hidden_states.shape)}")
+    print(f"  condition_mask:        {list(condition_mask.shape)}")
     print(f"  timestep:              {list(timestep.shape)}")
     print(f"  encoder_hidden_states: {list(encoder_hidden_states.shape)}")
 
@@ -233,7 +135,7 @@ with set_current_vllm_config(VllmConfig(device_config=device_config)):
             hidden_states=hidden_states.clone(),
             timestep=timestep.clone(),
             encoder_hidden_states=encoder_hidden_states.clone(),
-            condition_mask=None,
+            condition_mask=condition_mask.clone(),
             padding_mask=padding_mask.clone(),
             return_dict=False,
         )[0]
@@ -245,7 +147,7 @@ with set_current_vllm_config(VllmConfig(device_config=device_config)):
             hidden_states=hidden_states.clone(),
             timestep=timestep.clone(),
             encoder_hidden_states=encoder_hidden_states.clone(),
-            condition_mask=None,
+            condition_mask=condition_mask.clone(),
             padding_mask=padding_mask.clone(),
         )
     print(f"  Output shape: {list(test_out.shape)}, mean={test_out.mean().item():.4f}")

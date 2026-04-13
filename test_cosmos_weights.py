@@ -9,11 +9,12 @@ import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 
-MODEL_ID = "KyleShao/Cosmos-Predict2.5-2B-Diffusers"
+MODEL_ID = "nvidia/Cosmos-Predict2.5-2B"
+REVISION = "diffusers/base/post-trained"
 
 # 1. Download transformer weights (cached after first run)
-print("Downloading transformer weights...")
-model_path = snapshot_download(MODEL_ID, allow_patterns=["transformer/*"])
+print(f"Downloading transformer weights from {MODEL_ID} (revision: {REVISION})...")
+model_path = snapshot_download(MODEL_ID, revision=REVISION, allow_patterns=["transformer/*"])
 print(f"Downloaded to: {model_path}")
 
 # 2. Load config
@@ -86,19 +87,23 @@ with set_current_vllm_config(VllmConfig(device_config=device_config)):
     model.eval()
 
     # 6. Forward pass with small dummy input
-    # Config: in_channels=16, patch_size=[1,2,2], text_embed_dim=1024
+    # Config: in_channels may be 16 or 17 depending on checkpoint
+    # VAE latents are always 16 channels; condition_mask is 1 channel
     # H,W must be divisible by patch spatial size (2), T by temporal (1)
-    B, C, T, H, W = 1, 16, 2, 16, 16
+    B, C_latent, T, H, W = 1, 16, 2, 16, 16
     text_seq_len = 16
     text_embed_dim = config["text_embed_dim"]  # 1024
 
-    hidden_states = torch.randn(B, C, T, H, W, dtype=torch.bfloat16)
+    hidden_states = torch.randn(B, C_latent, T, H, W, dtype=torch.bfloat16)
     timestep = torch.tensor([0.5], dtype=torch.bfloat16)  # scalar sigma
     encoder_hidden_states = torch.randn(B, text_seq_len, text_embed_dim, dtype=torch.bfloat16)
     padding_mask = torch.zeros(B, 1, H, W, dtype=torch.bfloat16)
+    # Single-channel binary condition mask (Text2World: all zeros = no conditioning)
+    condition_mask = torch.zeros(B, 1, T, H, W, dtype=torch.bfloat16)
 
     print(f"\nRunning forward pass...")
     print(f"  hidden_states:         {list(hidden_states.shape)}")
+    print(f"  condition_mask:        {list(condition_mask.shape)}")
     print(f"  timestep:              {list(timestep.shape)}")
     print(f"  encoder_hidden_states: {list(encoder_hidden_states.shape)}")
     print(f"  padding_mask:          {list(padding_mask.shape)}")
@@ -108,7 +113,7 @@ with set_current_vllm_config(VllmConfig(device_config=device_config)):
             hidden_states=hidden_states,
             timestep=timestep,
             encoder_hidden_states=encoder_hidden_states,
-            condition_mask=None,
+            condition_mask=condition_mask,
             padding_mask=padding_mask,
         )
 
