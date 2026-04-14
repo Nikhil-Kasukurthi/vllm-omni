@@ -22,7 +22,9 @@ def main():
 
     dtype = getattr(torch, args.dtype)
     print(f"Loading diffusers pipeline: {args.model} (revision: {args.revision})")
-    pipe = Cosmos2_5_PredictBasePipeline.from_pretrained(args.model, revision=args.revision, torch_dtype=dtype)
+    pipe = Cosmos2_5_PredictBasePipeline.from_pretrained(
+        args.model, revision=args.revision, torch_dtype=dtype, safety_checker=None,
+    )
     pipe = pipe.to("cuda")
 
     gen = torch.Generator(device="cuda").manual_seed(42)
