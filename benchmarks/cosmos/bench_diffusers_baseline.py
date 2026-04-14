@@ -6,6 +6,15 @@ import torch
 from diffusers import Cosmos2_5_PredictBasePipeline
 
 
+def _disable_cosmos_safety_checker():
+    """Patch out CosmosSafetyChecker to avoid downloading the Aegis guardrail model."""
+    try:
+        import diffusers.pipelines.cosmos.pipeline_cosmos2_5_predict as mod
+        mod.CosmosSafetyChecker = lambda *a, **kw: None
+    except (ImportError, AttributeError):
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="nvidia/Cosmos-Predict2.5-2B")
@@ -21,9 +30,10 @@ def main():
     args = parser.parse_args()
 
     dtype = getattr(torch, args.dtype)
+    _disable_cosmos_safety_checker()
     print(f"Loading diffusers pipeline: {args.model} (revision: {args.revision})")
     pipe = Cosmos2_5_PredictBasePipeline.from_pretrained(
-        args.model, revision=args.revision, torch_dtype=dtype, safety_checker=None,
+        args.model, revision=args.revision, torch_dtype=dtype,
     )
     pipe = pipe.to("cuda")
 
