@@ -50,8 +50,18 @@ uv sync
 source .venv/bin/activate
 echo "Python: $(python --version)"
 
-# ── 4. Install vLLM (GPU build) ─────────────────────────────────────────
-echo ">>> Installing vLLM..."
+# ── 4. Install PyTorch + vLLM (GPU build) ────────────────────────────────
+echo ">>> Installing PyTorch and vLLM..."
+CUDA_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)
+if [ -n "$CUDA_MAJOR" ]; then
+    echo "  Detected CUDA driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)"
+fi
+# Install torch + torchvision + torchaudio together to keep versions in sync
+uv pip install torch torchvision torchaudio --force-reinstall
+# Upgrade NCCL to match the version PyTorch was built against
+uv pip install --upgrade nvidia-nccl-cu12
+# Pin transformers to v4 — diffusers is incompatible with transformers v5
+uv pip install 'transformers>=4.51.0,<5.0.0'
 uv pip install vllm
 
 # ── 5. Install vLLM-Omni (editable) ─────────────────────────────────────
@@ -66,7 +76,8 @@ uv pip install \
     tensorboard \
     memory_profiler \
     gdown \
-    imageio[ffmpeg]
+    imageio[ffmpeg] \
+    cosmos_guardrail
 
 # ── 7. Download Cosmos Predict 2.5 2B model ─────────────────────────────
 echo ">>> Pre-downloading model: $COSMOS_MODEL (revision: $COSMOS_REVISION)"
