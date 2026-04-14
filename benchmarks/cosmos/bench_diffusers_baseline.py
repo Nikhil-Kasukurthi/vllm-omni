@@ -6,11 +6,24 @@ import torch
 from diffusers import Cosmos2_5_PredictBasePipeline
 
 
+class _NoOpSafetyChecker:
+    """Stub safety checker that approves everything (avoids downloading Aegis)."""
+
+    def check_text_safety(self, *_a, **_kw):
+        return True
+
+    def check_video_safety(self, video, *_a, **_kw):
+        return video
+
+    def to(self, *_a, **_kw):
+        return self
+
+
 def _disable_cosmos_safety_checker():
-    """Patch out CosmosSafetyChecker to avoid downloading the Aegis guardrail model."""
+    """Replace CosmosSafetyChecker with a no-op stub."""
     try:
         import diffusers.pipelines.cosmos.pipeline_cosmos2_5_predict as mod
-        mod.CosmosSafetyChecker = lambda *a, **kw: None
+        mod.CosmosSafetyChecker = _NoOpSafetyChecker
     except (ImportError, AttributeError):
         pass
 

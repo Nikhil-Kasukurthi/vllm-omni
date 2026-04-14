@@ -486,7 +486,11 @@ class CosmosTransformerBlock(nn.Module):
         freqs_cos: torch.Tensor,
         freqs_sin: torch.Tensor,
         temb: torch.Tensor | None = None,
+        extra_pos_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if extra_pos_emb is not None:
+            hidden_states = hidden_states + extra_pos_emb
+
         norm_hs, gate = self.norm1(hidden_states, embedded_timestep, temb)
         attn_out = self.attn1(norm_hs, rotary_emb=(freqs_cos, freqs_sin))
         hidden_states = hidden_states + gate * attn_out
@@ -520,6 +524,9 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         rope_scale: tuple[float, float, float] = (2.0, 1.0, 1.0),
         concat_padding_mask: bool = True,
         extra_pos_embed_type: str | None = "learnable",
+        use_crossattn_projection: bool = False,
+        crossattn_proj_in_channels: int = 1024,
+        encoder_hidden_states_channels: int = 1024,
         **kwargs,
     ):
         super().__init__()
@@ -528,8 +535,15 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         self.out_channels = out_channels
         self.patch_size = patch_size
         self.concat_padding_mask = concat_padding_mask
+        self.use_crossattn_projection = use_crossattn_projection
 
         hidden_size = num_attention_heads * attention_head_dim
+
+        if use_crossattn_projection:
+            self.crossattn_proj = nn.Sequential(
+                nn.Linear(crossattn_proj_in_channels, encoder_hidden_states_channels, bias=True),
+                nn.GELU(),
+            )
 
         patch_embed_in_channels = in_channels + 1 if concat_padding_mask else in_channels
         self.patch_embed = CosmosPatchEmbed(patch_embed_in_channels, hidden_size, patch_size, bias=False)
@@ -573,6 +587,9 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         padding_mask: torch.Tensor | None = None,
         fps: int | None = None,
     ) -> torch.Tensor:
+        if self.use_crossattn_projection:
+            encoder_hidden_states = self.crossattn_proj(encoder_hidden_states)
+
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
 
         if condition_mask is not None:
@@ -602,9 +619,6 @@ class CosmosPredict25Transformer3DModel(nn.Module):
         hidden_states = self.patch_embed(hidden_states)
         hidden_states = hidden_states.flatten(1, 3)
 
-        if extra_pos_emb is not None:
-            hidden_states = hidden_states + extra_pos_emb
-
         if timestep.ndim == 1:
             temb, embedded_timestep = self.time_embed(hidden_states, timestep)
         elif timestep.ndim == 5:
@@ -624,7 +638,8 @@ class CosmosPredict25Transformer3DModel(nn.Module):
 
         for block in self.transformer_blocks:
             hidden_states = block(
-                hidden_states, encoder_hidden_states, embedded_timestep, freqs_cos, freqs_sin, temb,
+                hidden_states, encoder_hidden_states, embedded_timestep,
+                freqs_cos, freqs_sin, temb, extra_pos_emb,
             )
 
         hidden_states = self.norm_out(hidden_states, embedded_timestep, temb)

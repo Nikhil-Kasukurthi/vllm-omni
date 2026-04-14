@@ -46,7 +46,7 @@ def main():
     # Warmup
     print(f"Warming up ({args.warmup} runs)...")
     for _ in range(args.warmup):
-        omni.generate(prompts=[args.prompt], sampling_params=sampling_params)
+        omni.generate(prompts=[args.prompt], sampling_params_list=sampling_params)
         torch.cuda.synchronize()
 
     # Benchmark
@@ -55,7 +55,7 @@ def main():
     for i in range(args.repeats):
         torch.cuda.synchronize()
         t0 = time.perf_counter()
-        omni.generate(prompts=[args.prompt], sampling_params=sampling_params)
+        omni.generate(prompts=[args.prompt], sampling_params_list=sampling_params)
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - t0
         times.append(elapsed)

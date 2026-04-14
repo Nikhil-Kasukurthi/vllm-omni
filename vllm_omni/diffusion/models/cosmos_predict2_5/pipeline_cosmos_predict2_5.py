@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
 from typing import Any
 
 import torch
@@ -165,6 +166,19 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
             if self.scheduler.betas.is_cuda:
                 self.scheduler.betas = self.scheduler.betas.cpu()
 
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str] | None:
+        """Delegate weight loading to the transformer sub-module."""
+        prefix = "transformer."
+        transformer_weights = (
+            (name[len(prefix):], tensor)
+            for name, tensor in weights
+            if name.startswith(prefix)
+        )
+        self.transformer.load_weights(transformer_weights)
+        # Return None to skip strict unloaded-weights check, since checkpoint
+        # names (to_q/to_k/to_v) differ from fused parameter names (to_qkv).
+        return None
+
     # -----------------------------------------------------------------------
     # Text encoding
     # -----------------------------------------------------------------------
@@ -240,9 +254,9 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
     # Inference
     # -----------------------------------------------------------------------
 
-    def __call__(
+    def forward(
         self,
-        request: OmniDiffusionRequest | None = None,
+        req: OmniDiffusionRequest,
         prompt: str | list[str] | None = None,
         negative_prompt: str | list[str] | None = None,
         height: int = 704,
@@ -253,10 +267,18 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         generator: torch.Generator | None = None,
         **kwargs: Any,
     ) -> DiffusionOutput:
-        if request is not None:
-            prompt = request.prompt
-            num_inference_steps = getattr(request, "num_inference_steps", num_inference_steps)
-            guidance_scale = self.od_config.guidance_scale or guidance_scale
+        # Extract parameters from request (following Wan22Pipeline pattern)
+        if len(req.prompts) == 1:
+            prompt = req.prompts[0] if isinstance(req.prompts[0], str) else req.prompts[0].get("prompt")
+            negative_prompt = None if isinstance(req.prompts[0], str) else req.prompts[0].get("negative_prompt")
+        height = req.sampling_params.height or height
+        width = req.sampling_params.width or width
+        num_frames = req.sampling_params.num_frames if req.sampling_params.num_frames else num_frames
+        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        if req.sampling_params.generator is not None:
+            generator = req.sampling_params.generator
 
         if negative_prompt is None:
             negative_prompt = DEFAULT_NEGATIVE_PROMPT
