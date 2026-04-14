@@ -1,5 +1,6 @@
 # Common dependencies for all platforms
 av>=14.0.0
+transformers>=4.51.0
 omegaconf>=2.3.0
 resampy>=0.4.3
 diffusers>=0.36.0
