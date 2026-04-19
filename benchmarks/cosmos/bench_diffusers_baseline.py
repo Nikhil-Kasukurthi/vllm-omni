@@ -37,8 +37,8 @@ def main():
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--num-frames", type=int, default=93)
     parser.add_argument("--num-inference-steps", type=int, default=36)
-    parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--dtype", default="bfloat16", choices=["float16", "bfloat16"])
     args = parser.parse_args()
 
