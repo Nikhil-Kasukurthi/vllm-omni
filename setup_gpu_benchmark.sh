@@ -63,10 +63,12 @@ uv pip install --upgrade nvidia-nccl-cu12
 # Pin transformers to v4 — diffusers is incompatible with transformers v5
 uv pip install 'transformers>=4.51.0,<5.0.0'
 uv pip install vllm
+uv pip install peft==0.17.0
 
 # ── 5. Install vLLM-Omni (editable) ─────────────────────────────────────
 echo ">>> Installing vllm-omni..."
 uv pip install -e .
+
 
 # ── 6. Install profiling tools ───────────────────────────────────────────
 echo ">>> Installing profiling tools..."

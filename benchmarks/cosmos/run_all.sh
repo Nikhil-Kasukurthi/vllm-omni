@@ -1,10 +1,10 @@
 #!/bin/bash
-# Run the full Cosmos Predict 2.5 benchmark suite: diffusers baseline vs vLLM-Omni
-set -euo pipefail
+# Run the full Cosmos Predict 2.5 benchmark suite: diffusers baseline vs vLLM-Omni vs NVIDIA native
+set -uo pipefail  # don't -e: keep going past per-bench failures so other benches still produce numbers
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SMALL_ARGS="--height 480 --width 832 --num-frames 33 --num-inference-steps 10 --warmup 1 --repeats 3"
-FULL_ARGS="--height 704 --width 1280 --num-frames 93 --num-inference-steps 36 --warmup 1 --repeats 3"
+export SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export SMALL_ARGS="--height 480 --width 832 --num-frames 33 --num-inference-steps 10 --warmup 3 --repeats 5"
+export FULL_ARGS="--height 704 --width 1280 --num-frames 93 --num-inference-steps 36 --warmup 3 --repeats 5"
 
 echo ""
 echo "============================================"
@@ -18,6 +18,10 @@ python "$SCRIPT_DIR/bench_diffusers_baseline.py" $SMALL_ARGS 2>&1 | tee results_
 echo ""
 echo "--- vLLM-Omni (small) ---"
 python "$SCRIPT_DIR/bench_vllm_omni.py" $SMALL_ARGS 2>&1 | tee results_vllm_small.txt
+
+echo ""
+echo "--- NVIDIA native (small) ---"
+python "$SCRIPT_DIR/bench_nvidia_native.py" $SMALL_ARGS 2>&1 | tee results_nvidia_small.txt
 
 echo ""
 echo "============================================"
@@ -35,6 +39,10 @@ python "$SCRIPT_DIR/bench_vllm_omni.py" $FULL_ARGS 2>&1 | tee results_vllm_full.
 echo ""
 echo "--- vLLM-Omni + Cache-DiT (full) ---"
 python "$SCRIPT_DIR/bench_vllm_omni.py" $FULL_ARGS --cache-backend cache_dit 2>&1 | tee results_vllm_cachedit.txt
+
+echo ""
+echo "--- NVIDIA native (full) ---"
+python "$SCRIPT_DIR/bench_nvidia_native.py" $FULL_ARGS 2>&1 | tee results_nvidia_full.txt
 
 echo ""
 echo "============================================"
