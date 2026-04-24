@@ -12,9 +12,7 @@ from typing import Any
 
 import torch
 from diffusers import AutoencoderKLWan
-from vllm_omni.diffusion.models.schedulers.scheduling_flow_unipc_multistep import (
-    FlowUniPCMultistepScheduler,
-)
+from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from torch import nn
@@ -155,11 +153,18 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
             **transformer_config,
         )
 
-        self.scheduler = FlowUniPCMultistepScheduler(
-            num_train_timesteps=1000,
-            shift=1,
-            use_dynamic_shifting=False,
+        self.scheduler = UniPCMultistepScheduler.from_pretrained(
+            model,
+            subfolder="scheduler",
+            local_files_only=local_files_only,
+            revision=revision,
         )
+        if hasattr(self.scheduler, "alphas_cumprod") and isinstance(self.scheduler.alphas_cumprod, torch.Tensor):
+            if self.scheduler.alphas_cumprod.is_cuda:
+                self.scheduler.alphas_cumprod = self.scheduler.alphas_cumprod.cpu()
+        if hasattr(self.scheduler, "betas") and isinstance(self.scheduler.betas, torch.Tensor):
+            if self.scheduler.betas.is_cuda:
+                self.scheduler.betas = self.scheduler.betas.cpu()
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str] | None:
         """Delegate weight loading to the transformer sub-module."""
@@ -307,21 +312,21 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         padding_mask = latents.new_zeros(1, 1, height, width, dtype=transformer_dtype)
 
         # 3. Denoising loop
-        self.scheduler.set_timesteps(num_inference_steps, device=device, shift=5.0, use_kerras_sigma=True)
+        self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
 
         gt_velocity = (latents - cond_latent) * cond_mask
 
         for i, t in enumerate(timesteps):
-            t_value = (
-                t.float()
+            sigma_t = (
+                torch.tensor(self.scheduler.sigmas[i].item())
                 .unsqueeze(0)
                 .to(device=device, dtype=transformer_dtype)
             )
 
             in_latents = cond_mask * cond_latent + (1 - cond_mask) * latents
             in_latents = in_latents.to(transformer_dtype)
-            in_timestep = cond_indicator * 100.0 + (1 - cond_indicator) * t_value
+            in_timestep = cond_indicator * 0.1 + (1 - cond_indicator) * sigma_t
 
             noise_pred = self.transformer(
                 hidden_states=in_latents,
