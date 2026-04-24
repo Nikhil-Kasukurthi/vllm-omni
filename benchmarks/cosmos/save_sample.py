@@ -41,14 +41,17 @@ def _save_any(obj, out_path: Path, fps: int = 24) -> None:
 
 
 def _save_tensor_video(video: torch.Tensor, out_path: Path, fps: int = 24) -> None:
-    """video: (B, C, T, H, W) or (C, T, H, W), values roughly in [-1, 1] or [0, 1]."""
+    """video: any of (B,C,T,H,W) / (C,T,H,W) / (B,T,H,W,C) / (T,H,W,C); values in [-1,1] or [0,1]."""
     import imageio.v3 as iio
 
     if video.dim() == 5:
         video = video[0]
-    # (C, T, H, W) -> (T, H, W, C)
-    arr = video.detach().to(torch.float32).cpu().numpy()
-    arr = np.transpose(arr, (1, 2, 3, 0))
+    # Now (C, T, H, W) or (T, H, W, C). Detect by last-dim size.
+    arr = video.detach().to(torch.float32).cpu().numpy().copy()
+    if arr.shape[-1] in (1, 3, 4):
+        pass  # already (T, H, W, C)
+    else:
+        arr = np.transpose(arr, (1, 2, 3, 0))  # (C, T, H, W) -> (T, H, W, C)
     if arr.min() < -0.01:
         arr = (arr + 1.0) * 0.5
     arr = np.clip(arr, 0.0, 1.0)
