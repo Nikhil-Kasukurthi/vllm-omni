@@ -318,15 +318,15 @@ class CosmosPredict25Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         gt_velocity = (latents - cond_latent) * cond_mask
 
         for i, t in enumerate(timesteps):
-            t_value = (
-                t.float()
+            sigma_t = (
+                torch.tensor(self.scheduler.sigmas[i].item())
                 .unsqueeze(0)
                 .to(device=device, dtype=transformer_dtype)
             )
 
             in_latents = cond_mask * cond_latent + (1 - cond_mask) * latents
             in_latents = in_latents.to(transformer_dtype)
-            in_timestep = cond_indicator * 100.0 + (1 - cond_indicator) * t_value
+            in_timestep = cond_indicator * 0.1 + (1 - cond_indicator) * sigma_t
 
             noise_pred = self.transformer(
                 hidden_states=in_latents,
