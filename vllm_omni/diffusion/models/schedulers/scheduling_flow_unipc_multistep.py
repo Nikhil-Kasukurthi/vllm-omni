@@ -161,6 +161,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin, BaseScheduler):
         sigmas: list[float] | None = None,
         mu: float | None = None,
         shift: float | None = None,
+        use_kerras_sigma: bool = False,
     ) -> None:
         """
         Sets the discrete timesteps used for the diffusion chain (run before inference).
@@ -176,22 +177,36 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin, BaseScheduler):
                 Parameter for dynamic shifting.
             shift (`float`, *optional*):
                 Override shift parameter.
+            use_kerras_sigma (`bool`, defaults to False):
+                If True, build the sigma sequence from a Karras curve
+                (`sigma_max=200, sigma_min=0.01, rho=7`) and skip the
+                shift transformation. Required for Cosmos-Predict-2.5
+                parity with NVIDIA's native pipeline at low N.
         """
         if self.config.use_dynamic_shifting and mu is None:
             raise ValueError("Must pass a value for `mu` when `use_dynamic_shifting` is True")
 
-        if sigmas is None:
+        if use_kerras_sigma:
             assert num_inference_steps is not None
-            sigmas = np.linspace(self.sigma_max, self.sigma_min, num_inference_steps + 1).copy()[:-1]
-
-        if self.config.use_dynamic_shifting:
-            assert mu is not None
-            sigmas = self.time_shift(mu, 1.0, sigmas)
+            sigma_max, sigma_min, rho = 200.0, 0.01, 7
+            ramp = np.arange(num_inference_steps + 1) / num_inference_steps
+            min_inv_rho = sigma_min ** (1 / rho)
+            max_inv_rho = sigma_max ** (1 / rho)
+            sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+            sigmas = sigmas / (1 + sigmas)
         else:
-            if shift is None:
-                shift = self.config.shift
-            assert isinstance(sigmas, np.ndarray)
-            sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
+            if sigmas is None:
+                assert num_inference_steps is not None
+                sigmas = np.linspace(self.sigma_max, self.sigma_min, num_inference_steps + 1).copy()[:-1]
+
+            if self.config.use_dynamic_shifting:
+                assert mu is not None
+                sigmas = self.time_shift(mu, 1.0, sigmas)
+            else:
+                if shift is None:
+                    shift = self.config.shift
+                assert isinstance(sigmas, np.ndarray)
+                sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)
 
         if self.config.final_sigmas_type == "sigma_min":
             sigma_last = self.sigma_min
