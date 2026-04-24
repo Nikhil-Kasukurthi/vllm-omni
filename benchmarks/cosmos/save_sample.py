@@ -22,6 +22,24 @@ def _save_pil_frames(frames, out_path: Path, fps: int = 24) -> None:
     export_to_video(frames, str(out_path), fps=fps)
 
 
+def _save_any(obj, out_path: Path, fps: int = 24) -> None:
+    """Save a video given either a list-of-PIL, a single tensor/ndarray, or a list of one tensor."""
+    from PIL import Image as PILImage
+
+    if isinstance(obj, list) and len(obj) > 0 and isinstance(obj[0], PILImage.Image):
+        _save_pil_frames(obj, out_path, fps)
+        return
+    if isinstance(obj, list) and len(obj) == 1:
+        obj = obj[0]
+    if isinstance(obj, torch.Tensor):
+        _save_tensor_video(obj, out_path, fps)
+        return
+    if isinstance(obj, np.ndarray):
+        _save_tensor_video(torch.from_numpy(obj), out_path, fps)
+        return
+    raise TypeError(f"Don't know how to save object of type {type(obj)}")
+
+
 def _save_tensor_video(video: torch.Tensor, out_path: Path, fps: int = 24) -> None:
     """video: (B, C, T, H, W) or (C, T, H, W), values roughly in [-1, 1] or [0, 1]."""
     import imageio.v3 as iio
@@ -64,7 +82,7 @@ def run_diffusers(args):
         generator=gen,
     )
     frames = out.frames[0]
-    _save_pil_frames(frames, Path(args.out))
+    _save_any(frames, Path(args.out))
 
 
 def run_vllm_omni(args):
@@ -84,8 +102,19 @@ def run_vllm_omni(args):
     )
     results = omni.generate(prompts=[args.prompt], sampling_params_list=sp)
     result = results[0]
-    print(f"[vllm_omni] num_frames={len(result.images)} peak_mem_mb={result.peak_memory_mb:.0f}")
-    _save_pil_frames(result.images, Path(args.out))
+    img0 = result.images[0] if result.images else None
+    img0_info = type(img0).__name__
+    if hasattr(img0, "shape"):
+        img0_info += f" shape={tuple(img0.shape)}"
+    if hasattr(img0, "dtype"):
+        img0_info += f" dtype={img0.dtype}"
+    if hasattr(img0, "size") and not hasattr(img0, "shape"):
+        img0_info += f" size={img0.size}"
+    if hasattr(img0, "mode"):
+        img0_info += f" mode={img0.mode}"
+    print(f"[vllm_omni] len(images)={len(result.images)} images[0]={img0_info} "
+          f"peak_mem_mb={result.peak_memory_mb:.0f}")
+    _save_any(result.images, Path(args.out))
 
 
 def run_nvidia(args):
@@ -142,7 +171,7 @@ def run_nvidia(args):
     )
     print(f"[nvidia] video shape={tuple(video.shape)} dtype={video.dtype} "
           f"min={float(video.min()):.3f} max={float(video.max()):.3f}")
-    _save_tensor_video(video, Path(args.out))
+    _save_any(video, Path(args.out))
 
 
 BACKENDS = {"diffusers": run_diffusers, "vllm_omni": run_vllm_omni, "nvidia": run_nvidia}
